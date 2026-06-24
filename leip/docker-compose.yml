@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: leip_postgres
+    environment:
+      POSTGRES_USER: leip_user
+      POSTGRES_PASSWORD: secure_password_change_me
+      POSTGRES_DB: leip_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leip_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostGIS Extension
+  postgis:
+    image: postgis/postgis:15-3.3
+    container_name: leip_postgis
+    environment:
+      POSTGRES_USER: leip_user
+      POSTGRES_PASSWORD: secure_password_change_me
+      POSTGRES_DB: leip_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # FastAPI Backend
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: leip_api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://leip_user:secure_password_change_me@postgres:5432/leip_db
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      LOG_LEVEL: INFO
+      YOLO_DEVICE: cpu
+      DEBUG_MODE: "false"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m uvicorn app.api:app --host 0.0.0.0 --port 8000
+
+  # Streamlit Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: leip_dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      STREAMLIT_SERVER_PORT: 8501
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      LOG_LEVEL: INFO
+    volumes:
+      - ./frontend:/app/frontend
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      - api
+    command: streamlit run frontend/app.py --server.port=8501 --server.address=0.0.0.0
+
+  # Redis Cache (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: leip_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Prometheus Monitoring (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: leip_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+
+volumes:
+  postgres_data:
+  postgis_data:
+  redis_data:
+  prometheus_data:
+
+networks:
+  default:
+    name: leip_network
