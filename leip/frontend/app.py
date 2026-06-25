@@ -7,6 +7,13 @@ from pathlib import Path
 import tempfile
 from datetime import datetime
 
+st.set_page_config(
+    page_title="LEIP - Law Enforcement Intelligence Platform",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={'About': "LEIP v1.0 - Law Enforcement Intelligence Platform"}
+)
+
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -152,13 +159,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.set_page_config(
-    page_title="LEIP - Law Enforcement Intelligence Platform",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={'About': "LEIP v1.0 - Law Enforcement Intelligence Platform"}
-)
-
 # FBI Header
 st.markdown("""
 <div class="fbi-header">
@@ -275,7 +275,7 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
             
-            st.image(image, caption="Evidence: Original Image", use_column_width=True)
+            st.image(image, caption="Evidence: Original Image", use_container_width=True)
             
             if run_detection:
                 with st.spinner("🔍 Analyzing evidence..."):
@@ -317,9 +317,9 @@ with tab1:
                         with col1:
                             if show_annotations and annotated_frame is not None:
                                 display_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                                st.image(display_frame, caption="Evidence: Analysis Results", use_column_width=True)
+                                st.image(display_frame, caption="Evidence: Analysis Results", use_container_width=True)
                             else:
-                                st.image(image, caption="Evidence: Original Image", use_column_width=True)
+                                st.image(image, caption="Evidence: Original Image", use_container_width=True)
                         
                         with col2:
                             st.markdown("#### Detection Summary")

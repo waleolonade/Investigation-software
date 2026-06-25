@@ -4,17 +4,20 @@ RESTful API for all investigation operations
 """
 
 import logging
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends, status, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Depends, status, Form, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 from typing import Any, List, Optional, Dict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 from pathlib import Path
 import shutil
 import json
+import time
+from collections import defaultdict
+from contextlib import asynccontextmanager
 
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -32,15 +35,93 @@ from app import models, schemas, crud
 # ============ LOGGING ============
 logging.basicConfig(
     level=settings.log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s [%(levelname)s] [ReqID: %(request_id)s] %(name)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Custom log filter to inject request correlation ID
+class RequestIDFilter(logging.Filter):
+    def filter(self, record):
+        # Default request_id to empty string if not present
+        if not hasattr(record, 'request_id'):
+            record.request_id = 'SYSTEM'
+        return True
+
+logging.getLogger().handlers[0].addFilter(RequestIDFilter())
+
+# ============ GLOBALS ============
+face_matcher = None
+cctv_processor = None
+plate_recognizer = None
+vehicle_tracker = VehicleTracker()
+
+# Simple in-memory rate limiter cache
+RATE_LIMIT_CACHE = defaultdict(list)
+
+def initialize_models():
+    """Initialize AI models on startup"""
+    global face_matcher, cctv_processor, plate_recognizer
+    logger.info("Initializing AI models...")
+    
+    try:
+        face_matcher = LEIPFaceMatcher()
+        logger.info("✓ Face Matcher initialized")
+    except Exception as e:
+        logger.warning(f"Face Matcher initialization failed: {e}")
+    
+    try:
+        cctv_processor = CCTVProcessor(enable_face_matching=True)
+        logger.info("✓ CCTV Processor initialized")
+    except Exception as e:
+        logger.warning(f"CCTV Processor initialization failed: {e}")
+    
+    try:
+        plate_recognizer = LicensePlateRecognizer()
+        logger.info("✓ Plate Recognizer initialized")
+    except Exception as e:
+        logger.warning(f"Plate Recognizer initialization failed: {e}")
+
+# ============ LIFESPAN MANAGEMENT ============
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle application startup and shutdown lifecycle"""
+    # Startup
+    logger.info("Starting LEIP application...")
+    models.Base.metadata.create_all(bind=engine)
+    
+    # Pre-populate default accounts
+    db = next(get_db())
+    try:
+        if not crud.get_user_by_username(db, "investigator"):
+            crud.create_user(db, schemas.UserCreate(
+                username="investigator",
+                full_name="Investigation Analyst",
+                email="investigator@example.com",
+                password="password123",
+                role="investigator"
+            ))
+        if not crud.get_user_by_username(db, "admin"):
+            crud.create_user(db, schemas.UserCreate(
+                username="admin",
+                full_name="LEIP Administrator",
+                email="admin@example.com",
+                password="adminPassword!",
+                role="administrator"
+            ))
+    finally:
+        db.close()
+
+    initialize_models()
+    yield
+    # Shutdown
+    logger.info("Shutting down LEIP application...")
 
 # ============ INITIALIZE APP ============
 app = FastAPI(
     title="LEIP - Law Enforcement Intelligence Platform",
     description="Professional facial recognition and investigation system",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
 
 # CORS configuration
@@ -52,12 +133,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============ MIDDLEWARES ============
+@app.middleware("http")
+async def rate_limit_and_correlation_middleware(request: Request, call_next):
+    # Skip rate limiting for static/docs endpoints
+    path = request.url.path
+    if path in ["/docs", "/redoc", "/openapi.json", "/health", "/"]:
+        request.state.request_id = "SYSTEM"
+        return await call_next(request)
+
+    # In-memory IP based rate limiting
+    client_ip = request.client.host if request.client else "unknown"
+    current_time = time.time()
+    RATE_LIMIT_CACHE[client_ip] = [t for t in RATE_LIMIT_CACHE[client_ip] if current_time - t < 60]
+    
+    limit = settings.rate_limit_requests_per_minute
+    if len(RATE_LIMIT_CACHE[client_ip]) >= limit:
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={"status": "error", "detail": "Rate limit exceeded. Try again in a minute."}
+        )
+    RATE_LIMIT_CACHE[client_ip].append(current_time)
+
+    # Inject Request/Correlation ID
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+
+    # Call route handler
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
 # ============ AUTH HELPERS ============
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(hours=settings.jwt_expiration_hours))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(hours=settings.jwt_expiration_hours))
     sub_claim = data.get("sub")
     if not isinstance(sub_claim, str) or not sub_claim:
         raise ValueError("JWT subject claim must be a non-empty string")
@@ -88,63 +200,6 @@ def get_current_active_user(current_user: models.User = Depends(get_current_user
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
-
-# ============ GLOBALS ============
-face_matcher = None
-cctv_processor = None
-plate_recognizer = None
-vehicle_tracker = VehicleTracker()
-
-def initialize_models():
-    """Initialize AI models on startup"""
-    global face_matcher, cctv_processor, plate_recognizer
-    logger.info("Initializing AI models...")
-    
-    try:
-        face_matcher = LEIPFaceMatcher()
-        logger.info("✓ Face Matcher initialized")
-    except Exception as e:
-        logger.warning(f"Face Matcher initialization failed: {e}")
-    
-    try:
-        cctv_processor = CCTVProcessor(enable_face_matching=True)
-        logger.info("✓ CCTV Processor initialized")
-    except Exception as e:
-        logger.warning(f"CCTV Processor initialization failed: {e}")
-    
-    try:
-        plate_recognizer = LicensePlateRecognizer()
-        logger.info("✓ Plate Recognizer initialized")
-    except Exception as e:
-        logger.warning(f"Plate Recognizer initialization failed: {e}")
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize on startup"""
-    # Create DB tables
-    models.Base.metadata.create_all(bind=engine)
-    
-    # Pre-populate fake users for testing if DB is empty
-    db = next(get_db())
-    if not crud.get_user_by_username(db, "investigator"):
-        crud.create_user(db, schemas.UserCreate(
-            username="investigator",
-            full_name="Investigation Analyst",
-            email="investigator@example.com",
-            password="password123",
-            role="investigator"
-        ))
-    if not crud.get_user_by_username(db, "admin"):
-        crud.create_user(db, schemas.UserCreate(
-            username="admin",
-            full_name="LEIP Administrator",
-            email="admin@example.com",
-            password="adminPassword!",
-            role="administrator"
-        ))
-    db.close()
-
-    initialize_models()
 
 # ============ HEALTH & INFO ============
 
@@ -435,6 +490,69 @@ async def list_cases(
             "priority": c.priority.value if hasattr(c.priority, "value") else c.priority
         } for c in cases]
     }
+
+@app.put("/api/v1/cases/{case_id}")
+async def update_case(case_id: str, updates: schemas.CaseUpdate, db: Session = Depends(get_db)):
+    """Update case details"""
+    case = crud.get_case(db, case_id)
+    if not case:
+        try:
+            case_uuid = uuid.UUID(case_id)
+            db_case = crud.get_case_by_id(db, case_uuid)
+            if db_case:
+                case_id = db_case.case_number
+        except ValueError:
+            pass
+            
+    updated_case = crud.update_case(db, case_id, updates)
+    if not updated_case:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    return {
+        "status": "success",
+        "case_data": {
+            "case_id": updated_case.case_number,
+            "title": updated_case.title,
+            "description": updated_case.description,
+            "priority": updated_case.priority.value if hasattr(updated_case.priority, "value") else updated_case.priority,
+            "status": updated_case.status.value if hasattr(updated_case.status, "value") else updated_case.status,
+            "assigned_to": str(updated_case.assigned_to) if updated_case.assigned_to else None
+        }
+    }
+
+@app.delete("/api/v1/cases/{case_id}")
+async def delete_case(case_id: str, db: Session = Depends(get_db)):
+    """Soft-delete an investigation case"""
+    case = crud.get_case(db, case_id)
+    if not case:
+        try:
+            case_uuid = uuid.UUID(case_id)
+            db_case = crud.get_case_by_id(db, case_uuid)
+            if db_case:
+                case_id = db_case.case_number
+        except ValueError:
+            pass
+            
+    success = crud.delete_case(db, case_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Case not found")
+        
+    return {
+        "status": "success",
+        "detail": f"Case {case_id} has been soft-deleted"
+    }
+
+@app.get("/api/v1/persons", response_model=List[schemas.PersonResponse])
+async def list_persons(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """List all registered suspect/persons profiles"""
+    persons = crud.get_persons(db, skip=skip, limit=limit)
+    return persons
+
+@app.get("/api/v1/vehicles", response_model=List[schemas.VehicleResponse])
+async def list_vehicles(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """List all registered vehicles"""
+    vehicles = crud.get_vehicles(db, skip=skip, limit=limit)
+    return vehicles
 
 # ============ VEHICLE TRACKING ============
 

@@ -90,6 +90,7 @@ class Settings(BaseSettings):
         env="ALLOW_CORS_ORIGINS"
     )
     session_timeout_minutes: int = Field(default=30, env="SESSION_TIMEOUT_MINUTES")
+    rate_limit_requests_per_minute: int = Field(default=60, env="RATE_LIMIT_REQUESTS_PER_MINUTE")
     
     # ============ MONITORING ============
     prometheus_enabled: bool = Field(default=True, env="PROMETHEUS_ENABLED")
@@ -99,9 +100,11 @@ class Settings(BaseSettings):
     debug_mode: bool = Field(default=False, env="DEBUG_MODE")
     testing_mode: bool = Field(default=False, env="TESTING_MODE")
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": False,
+        "extra": "ignore"
+    }
     
     def validate_paths(self):
         """Ensure required directories exist"""
