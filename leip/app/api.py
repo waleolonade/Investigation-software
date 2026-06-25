@@ -140,7 +140,7 @@ async def startup_event():
             full_name="LEIP Administrator",
             email="admin@example.com",
             password="adminPassword!",
-            role="admin"
+            role="administrator"
         ))
     db.close()
 
@@ -209,11 +209,19 @@ async def upload_face(
             raise HTTPException(status_code=400, detail="Failed to extract face from image")
             
         # Ensure Person exists in DB
-        person = db.query(models.Person).filter(models.Person.person_id == person_id).first()
+        person = crud.get_person(db, person_id)
         if not person:
-            new_person = models.Person(person_id=person_id, name=meta_dict.get('name', 'Unknown'))
-            db.add(new_person)
-            db.commit()
+            full_name = meta_dict.get('name', 'Unknown')
+            name_parts = full_name.split(maxsplit=1)
+            first_name = name_parts[0]
+            last_name = name_parts[1] if len(name_parts) > 1 else ""
+            
+            crud.create_person(db, schemas.PersonCreate(
+                person_number=person_id,
+                first_name=first_name,
+                last_name=last_name,
+                status="active"
+            ))
         
         return {
             "status": "success",
@@ -368,17 +376,17 @@ async def get_job_status(job_id: str):
 async def create_case(request: schemas.CaseCreate, db: Session = Depends(get_db)):
     """Create a new investigation case"""
     case = crud.create_case(db, request)
-    logger.info(f"Case created: {case.case_id}")
+    logger.info(f"Case created: {case.case_number}")
     return {
         "status": "success",
-        "case_id": case.case_id,
+        "case_id": case.case_number,
         "case_data": {
-            "case_id": case.case_id,
+            "case_id": case.case_number,
             "title": case.title,
             "description": case.description,
-            "priority": case.priority,
-            "status": case.status,
-            "assigned_to": case.assigned_to
+            "priority": case.priority.value if hasattr(case.priority, "value") else case.priority,
+            "status": case.status.value if hasattr(case.status, "value") else case.status,
+            "assigned_to": str(case.assigned_to) if case.assigned_to else None
         }
     }
 
@@ -387,17 +395,23 @@ async def get_case(case_id: str, db: Session = Depends(get_db)):
     """Get case details"""
     case = crud.get_case(db, case_id)
     if not case:
+        try:
+            case_uuid = uuid.UUID(case_id)
+            case = crud.get_case_by_id(db, case_uuid)
+        except ValueError:
+            pass
+    if not case:
         raise HTTPException(status_code=404, detail="Case not found")
     
     return {
         "status": "success",
         "case_data": {
-            "case_id": case.case_id,
+            "case_id": case.case_number,
             "title": case.title,
             "description": case.description,
-            "priority": case.priority,
-            "status": case.status,
-            "assigned_to": case.assigned_to,
+            "priority": case.priority.value if hasattr(case.priority, "value") else case.priority,
+            "status": case.status.value if hasattr(case.status, "value") else case.status,
+            "assigned_to": str(case.assigned_to) if case.assigned_to else None,
             "detections": len(case.detections)
         }
     }
@@ -415,10 +429,10 @@ async def list_cases(
         "status": "success",
         "total_cases": len(cases),
         "cases": [{
-            "case_id": c.case_id,
+            "case_id": c.case_number,
             "title": c.title,
-            "status": c.status,
-            "priority": c.priority
+            "status": c.status.value if hasattr(c.status, "value") else c.status,
+            "priority": c.priority.value if hasattr(c.priority, "value") else c.priority
         } for c in cases]
     }
 
@@ -445,22 +459,28 @@ async def generate_case_report(case_id: str, db: Session = Depends(get_db)):
     """Generate case summary report"""
     case = crud.get_case(db, case_id)
     if not case:
+        try:
+            case_uuid = uuid.UUID(case_id)
+            case = crud.get_case_by_id(db, case_uuid)
+        except ValueError:
+            pass
+    if not case:
         raise HTTPException(status_code=404, detail="Case not found")
     
-    detections = crud.get_detections_by_case(db, case_id)
+    detections = crud.get_detections_by_case(db, case.id)
     
     report = {
         "report_id": str(uuid.uuid4()),
-        "case_id": case_id,
+        "case_id": case.case_number,
         "title": case.title,
         "generated_at": datetime.now().isoformat(),
         "summary": {
             "total_detections": len(detections),
-            "persons_detected": sum(1 for d in detections if d.detection_type == 'person'),
-            "vehicles_detected": sum(1 for d in detections if d.detection_type == 'vehicle'),
-            "matches_found": sum(1 for d in detections if d.detection_type == 'face')
+            "persons_detected": sum(1 for d in detections if getattr(d.detection_type, "value", d.detection_type) == 'person'),
+            "vehicles_detected": sum(1 for d in detections if getattr(d.detection_type, "value", d.detection_type) == 'vehicle'),
+            "matches_found": sum(1 for d in detections if getattr(d.detection_type, "value", d.detection_type) == 'face')
         },
-        "detections": [{"id": d.detection_id, "type": d.detection_type, "confidence": d.confidence} for d in detections]
+        "detections": [{"id": str(d.id), "type": getattr(d.detection_type, "value", d.detection_type), "confidence": d.confidence} for d in detections]
     }
     
     return {

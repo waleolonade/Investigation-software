@@ -1,93 +1,152 @@
-from pydantic import BaseModel, Field
+"""
+LEIP Pydantic Schemas
+Request/response models for the FastAPI endpoints
+"""
+
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import uuid
+
+
+# ============ USER SCHEMAS ============
 
 class UserBase(BaseModel):
     username: str
     full_name: Optional[str] = None
-    email: Optional[str] = None
+    email: str
     disabled: Optional[bool] = False
     role: str = "investigator"
+
 
 class UserCreate(UserBase):
     password: str
 
-class User(UserBase):
-    id: int
 
-    class Config:
-        orm_mode = True
+class UserResponse(UserBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
 
-class DetectionBase(BaseModel):
-    detection_id: str
-    case_id: str
-    frame_id: int
-    timestamp: str
-    detection_type: str
-    confidence: float
-    bbox: Dict[str, Any]
-    metadata_json: Optional[Dict[str, Any]] = None
-    person_id: Optional[str] = None
-    plate_number: Optional[str] = None
 
-class DetectionCreate(DetectionBase):
-    pass
+# ============ CASE SCHEMAS ============
 
-class Detection(DetectionBase):
-    class Config:
-        orm_mode = True
-
-class CaseBase(BaseModel):
-    case_id: str
+class CaseCreate(BaseModel):
+    case_number: str
     title: str
     description: Optional[str] = None
+    case_type: str = "general"
     priority: str = "medium"
     status: str = "open"
-    assigned_to: Optional[str] = None
+    classification: str = "UNCLASSIFIED"
+    jurisdiction: Optional[str] = None
 
-class CaseCreate(CaseBase):
-    pass
 
-class Case(CaseBase):
+class CaseUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    classification: Optional[str] = None
+    jurisdiction: Optional[str] = None
+
+
+class CaseResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    case_number: str
+    title: str
+    description: Optional[str] = None
+    case_type: str
+    priority: Any  # Enum value
+    status: Any  # Enum value
+    classification: str
     created_at: datetime
-    detections: List[Detection] = []
 
-    class Config:
-        orm_mode = True
 
-class PersonBase(BaseModel):
-    person_id: str
-    name: Optional[str] = None
-    source: str = "manual_upload"
+class CaseListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    case_number: str
+    title: str
+    status: Any
+    priority: Any
 
-class PersonCreate(PersonBase):
-    pass
 
-class Person(PersonBase):
+# ============ DETECTION SCHEMAS ============
+
+class DetectionCreate(BaseModel):
+    case_id: Optional[uuid.UUID] = None
+    person_id: Optional[uuid.UUID] = None
+    vehicle_id: Optional[uuid.UUID] = None
+    detection_type: str
+    confidence: float
+    detection_source: str = "cctv"
+    timestamp: datetime
+    bbox: Dict[str, Any]
+    frame_id: int = 0
+    source_file: Optional[str] = None
+    metadata_json: Optional[Dict[str, Any]] = None
+
+
+class DetectionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    detection_type: Any
+    confidence: float
+    timestamp: datetime
+    frame_id: int
+    bbox: Dict[str, Any]
+
+
+# ============ PERSON SCHEMAS ============
+
+class PersonCreate(BaseModel):
+    person_number: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    nationality: Optional[str] = None
+    gender: Optional[str] = None
+    status: str = "unknown"
+
+
+class PersonResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    person_number: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    status: Optional[str] = None
     created_at: datetime
-    detections: List[Detection] = []
 
-    class Config:
-        orm_mode = True
 
-class VehicleBase(BaseModel):
-    plate_number: str
-    make: Optional[str] = None
-    model: Optional[str] = None
+# ============ VEHICLE SCHEMAS ============
+
+class VehicleCreate(BaseModel):
+    vin: str
+    license_plate: str
+    make: str
+    model: str
+    year: Optional[int] = None
     color: Optional[str] = None
 
-class VehicleCreate(VehicleBase):
-    pass
 
-class Vehicle(VehicleBase):
-    detections: List[Detection] = []
+class VehicleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    vin: str
+    license_plate: str
+    make: str
+    model: str
+    color: Optional[str] = None
+    status: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+
+# ============ AUTH SCHEMAS ============
 
 class Token(BaseModel):
     access_token: str
     token_type: str
+
 
 class TokenData(BaseModel):
     username: Optional[str] = None
