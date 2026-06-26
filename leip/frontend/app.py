@@ -17,6 +17,8 @@ st.set_page_config(
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from app.terminal_executor import execute_python_code, execute_shell_command
+
 # Custom CSS for FBI-style dark theme
 st.markdown("""
 <style>
@@ -221,7 +223,7 @@ with st.sidebar:
         nms_threshold = 0.45
 
 # Main content tabs
-tab1, tab2, tab3, tab4 = st.tabs(["🔍 EVIDENCE ANALYSIS", "📋 INVESTIGATION RECORDS", "👤 SUSPECT DATABASE", "⚙️ SYSTEM INFO"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 EVIDENCE ANALYSIS", "📋 INVESTIGATION RECORDS", "👤 SUSPECT DATABASE", "⚙️ SYSTEM INFO", "💻 INVESTIGATION TERMINAL"])
 
 with tab1:
     st.markdown("### 📸 EVIDENCE UPLOAD & ANALYSIS")
@@ -502,5 +504,177 @@ with tab4:
     
     🔧 **Configuration**: Edit `leip/config/settings.py`
     """)
+
+
+with tab5:
+    st.markdown("### 💻 INVESTIGATION TERMINAL")
+    st.markdown("*Execute custom Python scripts or shell commands for advanced forensic investigations.*")
+    
+    st.markdown("""
+    <div class="evidence-box" style="border-color: #FF006E;">
+    🔐 <b>CLASSIFIED SECURE CONSOLE - ACCESS LEVEL 4 REQUIRED</b><br>
+    ⚠️ <b>CRITICAL WARNING:</b> All instructions, script blocks, and system executions are recorded in the 
+    platform forensic audit log (<code>logs/audit_trail.log</code>) for auditing and compliance.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([1.5, 1])
+    
+    with col2:
+        st.markdown("#### Execution Parameters")
+        exec_mode = st.selectbox(
+            "Execution Mode",
+            ["🐍 Python Interpreter", "🐚 Shell Console"],
+            key="terminal_exec_mode"
+        )
+        
+        # Templates based on execution mode
+        templates = {
+            "🐍 Python Interpreter": {
+                "Select a template...": "",
+                "📊 Query case statistics from DB": (
+                    "import pandas as pd\n"
+                    "from app.database import SessionLocal\n"
+                    "from app import models\n\n"
+                    "db = SessionLocal()\n"
+                    "try:\n"
+                    "    cases = db.query(models.Case).all()\n"
+                    "    print(f'Total Cases in DB: {len(cases)}')\n"
+                    "    for c in cases:\n"
+                    "        print(f'- Case {c.case_number}: {c.title} (Status: {c.status})')\n"
+                    "finally:\n"
+                    "    db.close()"
+                ),
+                "👤 List registered suspects": (
+                    "from app.database import SessionLocal\n"
+                    "from app import models\n\n"
+                    "db = SessionLocal()\n"
+                    "try:\n"
+                    "    suspects = db.query(models.Person).all()\n"
+                    "    print(f'Found {len(suspects)} suspect(s) in system:')\n"
+                    "    for s in suspects:\n"
+                    "        print(f'- ID: {s.person_number} | {s.first_name} {s.last_name} | Status: {s.status}')\n"
+                    "finally:\n"
+                    "    db.close()"
+                ),
+                "🎯 YOLO model benchmark run": (
+                    "import time\n"
+                    "import numpy as np\n"
+                    "from app.yolo_detector import YOLODetector\n\n"
+                    "print('Initializing YOLO Detector...')\n"
+                    "t0 = time.time()\n"
+                    "detector = YOLODetector()\n"
+                    "print(f'Model loaded in {time.time()-t0:.2f}s')\n\n"
+                    "# Run dummy frame\n"
+                    "dummy_frame = np.zeros((640, 640, 3), dtype=np.uint8)\n"
+                    "t1 = time.time()\n"
+                    "annotated, detections = detector.detect_frame(dummy_frame)\n"
+                    "print(f'Inference run completed in {time.time()-t1:.4f}s')\n"
+                    "print(f'Detected objects count: {len(detections)}')"
+                ),
+                "🛠️ Inspect system settings": (
+                    "from config.settings import settings\n"
+                    "print(f'Database URL: {settings.database_url}')\n"
+                    "print(f'YOLO Backend: {settings.yolo_backend}')\n"
+                    "print(f'LPR Engine: {settings.lpr_engine}')\n"
+                    "print(f'Upload Directory: {settings.upload_dir}')\n"
+                    "print(f'Debug Mode: {settings.debug_mode}')"
+                )
+            },
+            "🐚 Shell Console": {
+                "Select a template...": "",
+                "📄 View latest API server logs": "tail -n 30 logs/leip.log || type logs\\leip.log",
+                "🔍 Show workspace disk space": "df -h || wmic logicaldisk get size,freespace,caption",
+                "🧬 Run platform test suite": "pytest tests/ -v",
+                "📦 List installed python packages": "pip list",
+                "🛠️ Run system initialization check": "python init.py"
+            }
+        }
+        
+        mode_templates = templates[exec_mode]
+        selected_template_name = st.selectbox(
+            "Load Code Template",
+            list(mode_templates.keys()),
+            key="terminal_template"
+        )
+        
+        template_code = mode_templates[selected_template_name]
+        
+    with col1:
+        st.markdown("#### Input Console")
+        # Initialize session state for code inputs if not present
+        if "terminal_code_input" not in st.session_state:
+            st.session_state.terminal_code_input = ""
+            
+        # If template is selected, update session state
+        if template_code:
+            st.session_state.terminal_code_input = template_code
+            
+        code_input = st.text_area(
+            "Command / Script Input",
+            value=st.session_state.terminal_code_input,
+            height=250,
+            placeholder="Type your Python code or shell command here..."
+        )
+        
+        col_btn1, col_btn2 = st.columns([1.5, 2])
+        with col_btn1:
+            run_btn = st.button("⚡ EXECUTE COMMAND", use_container_width=True)
+        with col_btn2:
+            if st.button("🧹 Clear Input", use_container_width=False):
+                st.session_state.terminal_code_input = ""
+                st.session_state.terminal_template = "Select a template..."
+                st.rerun()
+
+    if run_btn and code_input:
+        with st.spinner("Executing secure payload..."):
+            # Determine logic based on mode
+            if "Python" in exec_mode:
+                res = execute_python_code(code_input)
+                exec_type = "Python Script"
+            else:
+                res = execute_shell_command(code_input)
+                exec_type = "Shell Command"
+                
+            # Log results in session state for rendering
+            st.session_state.terminal_result = {
+                "type": exec_type,
+                "code": code_input,
+                "success": res["success"],
+                "stdout": res["stdout"],
+                "stderr": res["stderr"],
+                "time": res["execution_time"]
+            }
+            
+    # Render execution outputs if present in session state
+    if "terminal_result" in st.session_state:
+        res = st.session_state.terminal_result
+        st.divider()
+        st.markdown("### 📊 EXECUTION OUTPUT")
+        
+        # Status details
+        status_color = "#00FF88" if res["success"] else "#FF006E"
+        status_text = "SUCCESS" if res["success"] else "FAILED"
+        
+        st.markdown(f"""
+        <div style="background-color: #1a1f3a; border-left: 5px solid {status_color}; padding: 15px; border-radius: 4px; font-family: monospace;">
+        <b>Payload Type:</b> {res["type"]}<br>
+        <b>Execution Status:</b> <span style="color: {status_color}; font-weight: bold;">{status_text}</span><br>
+        <b>Execution Duration:</b> {res["time"]:.4f} seconds
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Render Standard Output
+        if res["stdout"]:
+            st.markdown("#### Standard Output (stdout)")
+            st.code(res["stdout"], language="text")
+        elif res["success"]:
+            st.markdown("#### Standard Output (stdout)")
+            st.info("Execution completed successfully with no output to stdout.")
+            
+        # Render Standard Error
+        if res["stderr"]:
+            st.markdown("#### Standard Error / Traceback (stderr)")
+            st.code(res["stderr"], language="python" if "Python" in res["type"] else "text")
 
 

@@ -29,6 +29,8 @@ from app.face_utils import LEIPFaceMatcher
 from app.cctv_processor import CCTVProcessor
 from app.yolo_detector import YOLODetector
 from app.plate_recognition import LicensePlateRecognizer, VehicleTracker
+from app.terminal_executor import execute_python_code, execute_shell_command
+
 
 # Database imports
 from app.database import engine, get_db
@@ -624,7 +626,7 @@ async def login(username: str = Form(...), password: str = Form(...), db: Sessio
         )
 
     access_token = create_access_token(
-        data={"sub": user.username, "role": user.role}
+        data={"sub": user.username, "role": user.role.value if hasattr(user.role, "value") else user.role}
     )
     return {
         "status": "success",
@@ -634,7 +636,7 @@ async def login(username: str = Form(...), password: str = Form(...), db: Sessio
             "username": user.username,
             "full_name": user.full_name,
             "email": user.email,
-            "role": user.role,
+            "role": user.role.value if hasattr(user.role, "value") else user.role,
         }
     }
 
@@ -647,11 +649,40 @@ async def read_current_user(current_user: models.User = Depends(get_current_acti
             "username": current_user.username,
             "full_name": current_user.full_name,
             "email": current_user.email,
-            "role": current_user.role
+            "role": current_user.role.value if hasattr(current_user.role, "value") else current_user.role
         }
     }
 
+# ============ INVESTIGATION TERMINAL ============
+
+@app.post("/api/v1/investigation/terminal", response_model=schemas.TerminalExecutionResponse)
+async def run_investigation_terminal(
+    request: schemas.TerminalExecutionRequest,
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """
+    Classified investigation terminal for executing Python code or Shell commands.
+    Requires active Level 4 clearance (authorized active user session).
+    """
+    logger.info(f"[AUDIT] Terminal execution requested by user {current_user.username} (role: {current_user.role}). Mode: {request.mode}")
+    
+    if request.mode == "python":
+        result = execute_python_code(request.code)
+    elif request.mode == "shell":
+        result = execute_shell_command(request.code)
+    else:
+        raise HTTPException(status_code=400, detail="Invalid execution mode. Must be 'python' or 'shell'.")
+        
+    return schemas.TerminalExecutionResponse(
+        success=result["success"],
+        stdout=result["stdout"],
+        stderr=result["stderr"],
+        execution_time=result["execution_time"]
+    )
+
+
 # ============ ERROR HANDLERS ============
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):

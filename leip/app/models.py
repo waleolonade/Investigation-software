@@ -1,6 +1,20 @@
 from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, DateTime, JSON, Text, Enum, Index, UniqueConstraint
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
+from sqlalchemy.ext.compiler import compiles
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
+
+@compiles(ARRAY, "sqlite")
+def compile_array_sqlite(type_, compiler, **kw):
+    return "TEXT"
+
+@compiles(UUID, "sqlite")
+def compile_uuid_sqlite(type_, compiler, **kw):
+    return "CHAR(36)"
+
 from datetime import datetime, timezone
 import uuid
 from enum import Enum as PyEnum
@@ -90,7 +104,7 @@ class User(BaseModel):
     email = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     disabled = Column(Boolean, default=False, nullable=False)
-    role = Column(Enum(UserRole), default=UserRole.INVESTIGATOR, nullable=False)
+    role = Column(Enum(UserRole, values_callable=lambda x: [e.value for e in x]), default=UserRole.INVESTIGATOR, nullable=False)
     
     # Extended user fields
     badge_number = Column(String(50), unique=True, nullable=True)
@@ -114,7 +128,7 @@ class User(BaseModel):
     created_cases = relationship("Case", foreign_keys="Case.created_by", back_populates="case_creator")
     assigned_evidence = relationship("Evidence", foreign_keys="Evidence.assigned_to", back_populates="assigned_user")
     created_evidence = relationship("Evidence", foreign_keys="Evidence.created_by", back_populates="evidence_creator")
-    audit_logs = relationship("AuditLog", back_populates="user")
+    audit_logs = relationship("AuditLog", foreign_keys="AuditLog.user_id", back_populates="user")
     
     __table_args__ = (
         Index('idx_users_role', 'role'),
@@ -130,8 +144,8 @@ class Case(BaseModel):
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     case_type = Column(String(100), nullable=False)
-    priority = Column(Enum(CasePriority), default=CasePriority.MEDIUM, nullable=False)
-    status = Column(Enum(CaseStatus), default=CaseStatus.OPEN, nullable=False)
+    priority = Column(Enum(CasePriority, values_callable=lambda x: [e.value for e in x]), default=CasePriority.MEDIUM, nullable=False)
+    status = Column(Enum(CaseStatus, values_callable=lambda x: [e.value for e in x]), default=CaseStatus.OPEN, nullable=False)
     
     # Case metadata
     assigned_to = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -162,7 +176,7 @@ class Case(BaseModel):
     
     # Relationships
     assigned_investigator = relationship("User", foreign_keys=[assigned_to], back_populates="assigned_cases")
-    case_creator = relationship("User", foreign_keys=[created_by], back_populates="created_cases")
+    case_creator = relationship("User", foreign_keys="Case.created_by", back_populates="created_cases")
     supervisor = relationship("User", foreign_keys=[supervisor_id])
     
     detections = relationship("Detection", back_populates="case", cascade="all, delete-orphan")
@@ -378,7 +392,7 @@ class Detection(BaseModel):
     vehicle_id = Column(UUID(as_uuid=True), ForeignKey("vehicles.id"), nullable=True)
     
     # Detection details
-    detection_type = Column(Enum(DetectionType), nullable=False)
+    detection_type = Column(Enum(DetectionType, values_callable=lambda x: [e.value for e in x]), nullable=False)
     detection_subtype = Column(String(100), nullable=True)
     confidence = Column(Float, nullable=False)
     confidence_level = Column(String(20), nullable=True)
@@ -411,7 +425,7 @@ class Detection(BaseModel):
     case = relationship("Case", back_populates="detections")
     person = relationship("Person", back_populates="detections")
     vehicle = relationship("Vehicle", back_populates="detections")
-    reviewer = relationship("User")
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
     images = relationship("DetectionImage", back_populates="detection", cascade="all, delete-orphan")
     
     __table_args__ = (
@@ -435,7 +449,7 @@ class DetectionImage(BaseModel):
     width = Column(Integer, nullable=True)
     height = Column(Integer, nullable=True)
     format = Column(String(20), nullable=True)
-    metadata = Column(JSONB, nullable=True)
+    image_metadata = Column("metadata", JSONB, nullable=True)
     is_watermarked = Column(Boolean, default=False, nullable=False)
     
     detection = relationship("Detection", back_populates="images")
@@ -448,7 +462,7 @@ class Evidence(BaseModel):
     person_id = Column(UUID(as_uuid=True), ForeignKey("persons.id"), nullable=True)
     
     # Evidence details
-    evidence_type = Column(Enum(EvidenceType), nullable=False)
+    evidence_type = Column(Enum(EvidenceType, values_callable=lambda x: [e.value for e in x]), nullable=False)
     sub_type = Column(String(100), nullable=True)
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
@@ -485,8 +499,8 @@ class Evidence(BaseModel):
     # Relationships
     case = relationship("Case", back_populates="evidence")
     person = relationship("Person")
-    assigned_user = relationship("User", foreign_keys=[assigned_to], back_populates="assigned_evidence")
-    evidence_creator = relationship("User", foreign_keys=[created_by], back_populates="created_evidence")
+    assigned_user = relationship("User", foreign_keys="Evidence.assigned_to", back_populates="assigned_evidence")
+    evidence_creator = relationship("User", foreign_keys="Evidence.created_by", back_populates="created_evidence")
     collector = relationship("User", foreign_keys=[collected_by])
     analyst = relationship("User", foreign_keys=[analyzed_by])
     
@@ -513,7 +527,7 @@ class CaseNote(BaseModel):
     is_pinned = Column(Boolean, default=False, nullable=False)
     
     case = relationship("Case", back_populates="notes")
-    user = relationship("User")
+    user = relationship("User", foreign_keys=[user_id])
     
     __table_args__ = (
         Index('idx_case_notes_case_id', 'case_id'),
@@ -544,7 +558,7 @@ class Task(BaseModel):
     
     case = relationship("Case", back_populates="tasks")
     assignee = relationship("User", foreign_keys=[assigned_to])
-    creator = relationship("User", foreign_keys=[created_by])
+    creator = relationship("User", foreign_keys="Task.created_by")
     
     __table_args__ = (
         Index('idx_tasks_case_id', 'case_id'),
@@ -608,7 +622,7 @@ class AnalysisReport(BaseModel):
     version = Column(Integer, default=1, nullable=False)
     
     case = relationship("Case", back_populates="analysis_reports")
-    creator = relationship("User", foreign_keys=[created_by])
+    creator = relationship("User", foreign_keys="AnalysisReport.created_by")
     reviewer = relationship("User", foreign_keys=[reviewed_by])
     
     __table_args__ = (
@@ -635,7 +649,7 @@ class AuditLog(BaseModel):
     resource_usage = Column(JSONB, nullable=True)
     error_message = Column(Text, nullable=True)
     
-    user = relationship("User", back_populates="audit_logs")
+    user = relationship("User", foreign_keys=[user_id], back_populates="audit_logs")
     
     __table_args__ = (
         Index('idx_audit_logs_user_id', 'user_id'),
@@ -655,7 +669,7 @@ class AlertRule(BaseModel):
     
     entity_type = Column(String(50), nullable=False)  # detection, case, evidence, etc.
     severity = Column(String(20), default="medium")  # low, medium, high, critical
-    priority = Column(Enum(CasePriority), default=CasePriority.MEDIUM, nullable=False)
+    priority = Column(Enum(CasePriority, values_callable=lambda x: [e.value for e in x]), default=CasePriority.MEDIUM, nullable=False)
     
     is_active = Column(Boolean, default=True, nullable=False)
     last_triggered = Column(DateTime, nullable=True)

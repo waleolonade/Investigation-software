@@ -147,6 +147,19 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
-
 class TokenData(BaseModel):
     username: Optional[str] = None
+
+
+# ============ TERMINAL SCHEMAS ============
+
+class TerminalExecutionRequest(BaseModel):
+    code: str
+    mode: str = "python"  # "python" or "shell"
+
+
+class TerminalExecutionResponse(BaseModel):
+    success: bool
+    stdout: str
+    stderr: str
+    execution_time: float

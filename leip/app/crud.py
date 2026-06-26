@@ -24,12 +24,15 @@ def get_user_by_username(db: Session, username: str):
 
 def create_user(db: Session, user: schemas.UserCreate):
     hashed_password = PWD_CONTEXT.hash(user.password)
+    role_val = user.role
+    if isinstance(role_val, str):
+        role_val = getattr(models.UserRole, role_val.upper(), models.UserRole.INVESTIGATOR)
     db_user = models.User(
         username=user.username,
         full_name=user.full_name,
         email=user.email,
         hashed_password=hashed_password,
-        role=user.role
+        role=role_val
     )
     db.add(db_user)
     db.commit()
@@ -57,13 +60,20 @@ def get_cases(db: Session, skip: int = 0, limit: int = 100, status: str = None, 
 
 
 def create_case(db: Session, case: schemas.CaseCreate):
+    priority_val = case.priority
+    if isinstance(priority_val, str):
+        priority_val = getattr(models.CasePriority, priority_val.upper(), models.CasePriority.MEDIUM)
+    status_val = case.status
+    if isinstance(status_val, str):
+        status_val = getattr(models.CaseStatus, status_val.upper(), models.CaseStatus.OPEN)
+        
     db_case = models.Case(
         case_number=case.case_number,
         title=case.title,
         description=case.description,
         case_type=case.case_type,
-        priority=case.priority,
-        status=case.status,
+        priority=priority_val,
+        status=status_val,
         classification=case.classification,
         jurisdiction=case.jurisdiction,
     )
@@ -79,6 +89,10 @@ def update_case(db: Session, case_number: str, updates: schemas.CaseUpdate):
         return None
     update_data = updates.model_dump(exclude_unset=True)
     for field, value in update_data.items():
+        if field == "priority" and isinstance(value, str):
+            value = getattr(models.CasePriority, value.upper(), models.CasePriority.MEDIUM)
+        elif field == "status" and isinstance(value, str):
+            value = getattr(models.CaseStatus, value.upper(), models.CaseStatus.OPEN)
         setattr(db_case, field, value)
     db_case.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -99,11 +113,15 @@ def delete_case(db: Session, case_number: str):
 # ============ DETECTION OPERATIONS ============
 
 def create_detection(db: Session, detection: schemas.DetectionCreate):
+    det_type = detection.detection_type
+    if isinstance(det_type, str):
+        det_type = getattr(models.DetectionType, det_type.upper(), models.DetectionType.OBJECT)
+        
     db_detection = models.Detection(
         case_id=detection.case_id,
         person_id=detection.person_id,
         vehicle_id=detection.vehicle_id,
-        detection_type=detection.detection_type,
+        detection_type=det_type,
         confidence=detection.confidence,
         detection_source=detection.detection_source,
         timestamp=detection.timestamp,
